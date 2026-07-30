@@ -1,0 +1,11 @@
+[
+  {
+    "id": 1,
+    "name": "冉晗666",
+    "length_addition": 0.0,
+    "width_addition": 0.0,
+    "unit_price": 1.0,
+    "discounts": [{"min_qty": 1000, "discount_rate": 0.8}],
+    "created_at": "2026-07-30 23:43:59"
+  }
+]
