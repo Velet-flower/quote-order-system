@@ -69,6 +69,35 @@ def get_next_id(items):
     return max(item['id'] for item in items) + 1
 
 
+def generate_quote_no(quotes):
+    """生成报价单编号：QJ + YYYYMMDD + 3位当日序号，如 QJ20260731001"""
+    today_str = datetime.now().strftime('%Y%m%d')
+    prefix = f'QJ{today_str}'
+    # 统计今天已有的报价单数量
+    today_count = sum(1 for q in quotes if q.get('quote_no', '').startswith(prefix))
+    seq = today_count + 1
+    return f'{prefix}{seq:03d}'
+
+
+def backfill_quote_no(quotes):
+    """为已有报价记录补充编号（按创建时间顺序）"""
+    changed = False
+    for q in quotes:
+        if not q.get('quote_no'):
+            # 从 created_at 提取日期，没有则用今天
+            created = q.get('created_at', '')
+            if len(created) >= 10:
+                date_str = created[:10].replace('-', '')
+            else:
+                date_str = datetime.now().strftime('%Y%m%d')
+            prefix = f'QJ{date_str}'
+            # 统计同日期已有编号数
+            same_day = sum(1 for x in quotes if x.get('quote_no', '').startswith(prefix))
+            q['quote_no'] = f'{prefix}{same_day + 1:03d}'
+            changed = True
+    return changed
+
+
 # ============================================================
 #  辅助函数
 # ============================================================
@@ -583,6 +612,74 @@ BASE_CSS = """
     flex-wrap: wrap;
     gap: 10px;
   }
+
+  /* ===== 搜索栏 ===== */
+  .search-bar {
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: rgba(139, 90, 43, 0.04);
+    border: 1px solid rgba(139, 90, 43, 0.12);
+    border-radius: 12px;
+  }
+  .search-form {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .search-input {
+    flex: 1;
+    min-width: 200px;
+    padding: 9px 14px;
+    border: 1.5px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+    background: rgba(255, 255, 255, 0.85);
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .search-input:focus {
+    outline: none;
+    border-color: #8B5A2B;
+    box-shadow: 0 0 0 3px rgba(139, 90, 43, 0.12);
+  }
+  .search-date {
+    padding: 9px 12px;
+    border: 1.5px solid #ddd;
+    border-radius: 8px;
+    font-size: 13px;
+    background: rgba(255, 255, 255, 0.85);
+    color: #555;
+    transition: border-color 0.2s;
+  }
+  .search-date:focus {
+    outline: none;
+    border-color: #8B5A2B;
+  }
+  .search-btn {
+    padding: 9px 24px;
+    background: #8B5A2B;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s;
+  }
+  .search-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(139, 90, 43, 0.3);
+  }
+  .search-reset {
+    color: #8B5A2B;
+    font-size: 13px;
+    text-decoration: none;
+    padding: 9px 12px;
+    border-radius: 8px;
+    transition: background 0.2s;
+  }
+  .search-reset:hover {
+    background: rgba(139, 90, 43, 0.08);
+  }
   .btn-clear-all {
     display: inline-block;
     background: transparent;
@@ -759,9 +856,17 @@ def index():
                 else:
                     convert_row = ''
 
+                # 生成报价单编号
+                all_quotes = load_quotes()
+                quote_no = generate_quote_no(all_quotes)
+
                 result_html = f"""
                 <div class="result-box">
                   <h3>报价结果</h3>
+                  <div class="result-row">
+                    <span class="result-label">报价单号</span>
+                    <span class="result-value" style="color:#8B5A2B;font-weight:600;font-size:16px;">{quote_no}</span>
+                  </div>
                   <div class="result-row">
                     <span class="result-label">选用材质</span>
                     <span class="result-value">{material['name']}</span>
@@ -799,9 +904,10 @@ def index():
                 """
 
                 # 保存报价记录
-                quotes = load_quotes()
+                quotes = all_quotes
                 quote_record = {
                     'id': get_next_id(quotes),
+                    'quote_no': quote_no,
                     'material_name': material['name'],
                     'length': length,
                     'width': width,
@@ -1068,16 +1174,34 @@ def view_list():
 def view_quotes():
     quotes = load_quotes()
 
-    if quotes:
+    # === 搜索筛选 ===
+    keyword = request.args.get('keyword', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+
+    filtered = quotes
+    if keyword:
+        kw = keyword.lower()
+        filtered = [q for q in filtered if kw in q.get('quote_no', '').lower()
+                    or kw in q.get('material_name', '').lower()
+                    or kw in q.get('remark', '').lower()]
+    if date_from:
+        filtered = [q for q in filtered if q.get('created_at', '') >= date_from]
+    if date_to:
+        # date_to 是日期，需要包含当天全天，所以加一天比较
+        filtered = [q for q in filtered if q.get('created_at', '')[:10] <= date_to]
+
+    if filtered:
         rows_html = ''
-        for q in reversed(quotes):  # 最新的排前面
+        for q in reversed(filtered):  # 最新的排前面
             disc_col = q['discount_desc'] if q.get('discount_rate') else '<span class="tag-none">—</span>'
             remark = q.get('remark', '') or ''
             remark_cell = f'<td class="remark-cell">{remark}</td>' if remark else '<td class="remark-cell"><span class="tag-none">—</span></td>'
             q_unit = q.get('input_unit', 'cm')
+            q_no = q.get('quote_no', f'QJ{q["id"]:08d}')
             rows_html += f"""
             <tr>
-              <td>{q['id']}</td>
+              <td style="color:#8B5A2B;font-weight:600;font-size:13px;">{q_no}</td>
               <td>{q['material_name']}</td>
               <td>{q['length']:.1f}×{q['width']:.1f}×{q['height']:.1f} {q_unit}</td>
               <td>{q['quantity']}</td>
@@ -1086,14 +1210,17 @@ def view_quotes():
               <td><strong style="color:#c0a062;">{q['final_total']:.2f}</strong></td>
               {remark_cell}
               <td>{q.get('created_at', '未知')}</td>
-              <td><a href="/quotes/delete/{q['id']}" class="btn-link-del" onclick="return confirm('确认删除此条报价记录？')">删除</a></td>
+              <td><a href="/quotes/delete/{q['id']}" class="btn-link-del" onclick="return confirm('确认删除报价单「{q_no}」？')">删除</a></td>
             </tr>
             """
+        result_summary = f'共 {len(filtered)} 条'
+        if len(filtered) < len(quotes):
+            result_summary += f'（筛选自 {len(quotes)} 条）'
         table_html = f"""
         <table>
           <thead>
             <tr>
-              <th>编号</th>
+              <th>报价单号</th>
               <th>材质</th>
               <th>尺寸</th>
               <th>数量</th>
@@ -1110,17 +1237,33 @@ def view_quotes():
           </tbody>
         </table>
         <div class="table-footer">
-          <span style="color:#7a8494;font-size:13px;">共 {len(quotes)} 条报价记录</span>
+          <span style="color:#7a8494;font-size:13px;">{result_summary}</span>
           <a href="/quotes/clear-all" class="btn-clear-all" onclick="return confirm('⚠️ 确认清空全部报价记录？此操作不可撤销！')">清空全部记录</a>
         </div>
         """
     else:
-        table_html = '<div class="empty-msg">暂无报价记录，去首页报价器生成第一条吧。</div>'
+        empty_msg = '没有找到匹配的报价记录，试试调整搜索条件。' if (keyword or date_from or date_to) else '暂无报价记录，去首页报价器生成第一条吧。'
+        table_html = f'<div class="empty-msg">{empty_msg}</div>'
+
+    # 搜索栏
+    search_html = f"""
+    <div class="search-bar">
+      <form method="GET" action="/quotes" class="search-form">
+        <input type="text" name="keyword" value="{keyword}" placeholder="搜报价单号 / 材质名 / 备注…" class="search-input">
+        <input type="date" name="date_from" value="{date_from}" class="search-date" title="开始日期">
+        <span style="color:#999;">~</span>
+        <input type="date" name="date_to" value="{date_to}" class="search-date" title="结束日期">
+        <button type="submit" class="search-btn">搜索</button>
+        {'<a href="/quotes" class="search-reset">清除筛选</a>' if (keyword or date_from or date_to) else ''}
+      </form>
+    </div>
+    """
 
     content = f"""
     <div class="card">
       <h2>报价记录</h2>
-      <div class="tip">每次在首页报价器提交报价后，记录会自动保存在此。含客户备注，方便后续跟进。</div>
+      <div class="tip">每次在首页报价器提交报价后，记录会自动保存在此。可按报价单号、材质、备注或日期筛选。</div>
+      {search_html}
       {table_html}
     </div>
     """
@@ -1282,7 +1425,11 @@ def edit_material(rid):
 if __name__ == '__main__':
     # 启动时确保数据文件存在
     load_rules()
-    load_quotes()
+    _quotes = load_quotes()
+    # 为历史报价记录补充编号
+    if backfill_quote_no(_quotes):
+        save_quotes(_quotes)
+        print(f"  已为 {_quotes.__len__()} 条历史报价记录补充编号")
     # 本地开发模式（debug=True）；生产环境通过 wsgi.py + Gunicorn 启动
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
     print("=" * 50)
