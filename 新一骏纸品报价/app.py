@@ -8,7 +8,7 @@ Flask 单文件应用：纸箱厂智能报价与数据管理
 import json
 import os
 from datetime import datetime
-from flask import Flask, request, render_template_string, redirect
+from flask import Flask, request, render_template_string, redirect, jsonify
 
 app = Flask(__name__)
 
@@ -18,6 +18,7 @@ app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RULES_FILE = os.path.join(BASE_DIR, 'rules.json')        # 材质数据
 QUOTES_FILE = os.path.join(BASE_DIR, 'quotations.json')   # 报价记录
+CUSTOMERS_FILE = os.path.join(BASE_DIR, 'customers.json') # 客户数据
 
 
 # ============================================================
@@ -61,6 +62,14 @@ def load_quotes():
 
 def save_quotes(quotes):
     save_json(QUOTES_FILE, quotes)
+
+
+def load_customers():
+    return load_json(CUSTOMERS_FILE, [])
+
+
+def save_customers(customers):
+    save_json(CUSTOMERS_FILE, customers)
 
 
 def get_next_id(items):
@@ -747,6 +756,7 @@ def page_wrapper(title, nav_active, content, extra_head=''):
     <a href="/" class="{'active' if nav_active == 'home' else ''}">首页报价器</a>
     <a href="/add" class="{'active' if nav_active == 'add' else ''}">添加材质</a>
     <a href="/list" class="{'active' if nav_active == 'list' else ''}">材质数据</a>
+    <a href="/customers" class="{'active' if nav_active == 'customers' else ''}">客户管理</a>
     <a href="/quotes" class="{'active' if nav_active == 'quotes' else ''}">报价记录</a>
   </div>
   <div class="container">
@@ -765,8 +775,9 @@ def page_wrapper(title, nav_active, content, extra_head=''):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     rules = load_rules()
+    customers = load_customers()
     result_html = ''
-    form_data = {'length': '', 'width': '', 'height': '', 'quantity': '', 'material_id': '', 'remark': '', 'unit': 'cm'}
+    form_data = {'length': '', 'width': '', 'height': '', 'quantity': '', 'material_id': '', 'remark': '', 'unit': 'cm', 'customer_id': ''}
 
     if request.method == 'POST':
         try:
@@ -775,6 +786,7 @@ def index():
             height = float(request.form.get('height', 0))
             quantity = int(request.form.get('quantity', 0))
             material_id = int(request.form.get('material_id', 0))
+            customer_id = int(request.form.get('customer_id', 0)) if request.form.get('customer_id') else 0
             remark = request.form.get('remark', '').strip()
             unit = request.form.get('unit', 'cm')
             # 单位换算：统一转为厘米参与计算
@@ -790,7 +802,8 @@ def index():
                 'quantity': request.form.get('quantity', ''),
                 'material_id': request.form.get('material_id', ''),
                 'remark': remark,
-                'unit': unit
+                'unit': unit,
+                'customer_id': request.form.get('customer_id', '')
             }
 
             # 查找选定材质
@@ -800,8 +813,18 @@ def index():
                     material = r
                     break
 
+            # 查找选定客户
+            customer_name = ''
+            if customer_id:
+                for c in customers:
+                    if c['id'] == customer_id:
+                        customer_name = c['name']
+                        break
+
             if not material:
                 result_html = '<div class="discount-notice">请选择有效的材质！</div>'
+            elif not customer_id:
+                result_html = '<div class="discount-notice">请先选择客户！如无客户可点击「快速新建」添加。</div>'
             elif length <= 0 or width <= 0 or quantity <= 0:
                 result_html = '<div class="discount-notice">请输入有效的尺寸和数量！</div>'
             else:
@@ -860,6 +883,13 @@ def index():
                 all_quotes = load_quotes()
                 quote_no = generate_quote_no(all_quotes)
 
+                # 客户信息行
+                customer_row = f"""
+                  <div class="result-row">
+                    <span class="result-label">客户</span>
+                    <span class="result-value">{customer_name}</span>
+                  </div>""" if customer_name else ''
+
                 result_html = f"""
                 <div class="result-box">
                   <h3>报价结果</h3>
@@ -867,6 +897,7 @@ def index():
                     <span class="result-label">报价单号</span>
                     <span class="result-value" style="color:#8B5A2B;font-weight:600;font-size:16px;">{quote_no}</span>
                   </div>
+                  {customer_row}
                   <div class="result-row">
                     <span class="result-label">选用材质</span>
                     <span class="result-value">{material['name']}</span>
@@ -908,6 +939,8 @@ def index():
                 quote_record = {
                     'id': get_next_id(quotes),
                     'quote_no': quote_no,
+                    'customer_id': customer_id if customer_id else None,
+                    'customer_name': customer_name,
                     'material_name': material['name'],
                     'length': length,
                     'width': width,
@@ -940,6 +973,17 @@ def index():
     else:
         material_select = '<select name="material_id" disabled><option>请先到后台添加材质</option></select><p style="color:#c0392b;margin-top:-10px;margin-bottom:18px;font-size:13px;">暂无材质数据，请先到「添加材质」页面录入。</p>'
 
+    # 构建客户下拉菜单（必选）
+    if customers:
+        cust_options = '<option value="">— 请选择客户 —</option>\n'
+        for c in customers:
+            selected = 'selected' if str(c['id']) == str(form_data['customer_id']) else ''
+            phone_str = f' / {c["phone"]}' if c.get('phone') else ''
+            cust_options += f'<option value="{c["id"]}" {selected}>{c["name"]}{phone_str}</option>\n'
+        customer_select = f'<select name="customer_id" required>{cust_options}</select>'
+    else:
+        customer_select = '<select name="customer_id" required disabled><option value="">— 暂无客户，请先新建 —</option></select>'
+
     unit_sel = {
         'cm': 'selected' if form_data.get('unit', 'cm') == 'cm' else '',
         'mm': 'selected' if form_data.get('unit') == 'mm' else '',
@@ -949,8 +993,32 @@ def index():
     content = f"""
     <div class="card">
       <h2>纸箱快速报价</h2>
-      <div class="tip">输入纸箱尺寸和数量，选择材质后系统自动计算用料面积与总价。优惠折扣按所选材质的规则自动匹配。支持毫米/厘米/米三种单位自动换算。</div>
+      <div class="tip">先选择客户，再输入纸箱尺寸和数量，选择材质后系统自动计算用料面积与总价。优惠折扣按所选材质的规则自动匹配。支持毫米/厘米/米三种单位自动换算。</div>
       <form method="POST" action="/">
+        <div class="form-row" style="margin-bottom:0;">
+          <div class="form-group" style="flex:3;">
+            <label>选择客户 <span style="color:#c0392b;">*</span></label>
+            {customer_select}
+          </div>
+          <div class="form-group" style="flex:0 0 auto;align-self:flex-end;">
+            <button type="button" class="btn-quick-add" onclick="toggleQuickCustomer()">＋ 快速新建</button>
+          </div>
+        </div>
+        <div id="quick-cust-form" class="quick-cust-form" style="display:none;">
+          <div class="form-row">
+            <div class="form-group">
+              <label>客户姓名 <span style="color:#c0392b;">*</span></label>
+              <input type="text" id="quick-cust-name" placeholder="如：张老板">
+            </div>
+            <div class="form-group">
+              <label>联系电话</label>
+              <input type="text" id="quick-cust-phone" placeholder="如：13800138000">
+            </div>
+            <div class="form-group" style="flex:0 0 auto;align-self:flex-end;">
+              <button type="button" class="btn" style="padding:10px 20px;font-size:14px;" onclick="submitQuickCustomer()">添加并选中</button>
+            </div>
+          </div>
+        </div>
         <div class="form-row">
           <div class="form-group" style="flex:0.5;">
             <label>尺寸单位</label>
@@ -991,7 +1059,71 @@ def index():
     </div>
     """
 
-    return render_template_string(page_wrapper('首页报价器 - 新一骏纸品有限公司', 'home', content))
+    quick_add_js = """
+  <style>
+    .btn-quick-add {
+      background: rgba(255,255,255,0.6);
+      border: 1.5px dashed #8B5A2B;
+      color: #8B5A2B;
+      padding: 10px 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .btn-quick-add:hover {
+      background: rgba(139,90,43,0.1);
+      border-style: solid;
+    }
+    .quick-cust-form {
+      background: rgba(139,90,43,0.05);
+      border: 1px dashed rgba(139,90,43,0.3);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 18px;
+      margin-top: 8px;
+    }
+  </style>
+  <script>
+    function toggleQuickCustomer() {
+      var f = document.getElementById('quick-cust-form');
+      f.style.display = f.style.display === 'none' ? 'block' : 'none';
+      if (f.style.display === 'block') {
+        document.getElementById('quick-cust-name').focus();
+      }
+    }
+    function submitQuickCustomer() {
+      var name = document.getElementById('quick-cust-name').value.trim();
+      var phone = document.getElementById('quick-cust-phone').value.trim();
+      if (!name) { alert('请输入客户姓名'); return; }
+      var fd = new FormData();
+      fd.append('name', name);
+      fd.append('phone', phone);
+      fetch('/api/customers/quick-add', { method: 'POST', body: fd })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.success) {
+            var sel = document.querySelector('select[name="customer_id"]');
+            if (sel.disabled) { sel.disabled = false; sel.innerHTML = ''; }
+            var opt = document.createElement('option');
+            opt.value = data.customer.id;
+            opt.textContent = data.customer.name + (data.customer.phone ? ' / ' + data.customer.phone : '');
+            sel.appendChild(opt);
+            sel.value = data.customer.id;
+            document.getElementById('quick-cust-name').value = '';
+            document.getElementById('quick-cust-phone').value = '';
+            document.getElementById('quick-cust-form').style.display = 'none';
+          } else {
+            alert(data.message || '添加失败');
+          }
+        })
+        .catch(function() { alert('网络错误，请重试'); });
+    }
+  </script>
+    """
+
+    return render_template_string(page_wrapper('首页报价器 - 新一骏纸品有限公司', 'home', content, quick_add_js))
 
 
 # ============================================================
@@ -1173,23 +1305,27 @@ def view_list():
 @app.route('/quotes')
 def view_quotes():
     quotes = load_quotes()
+    customers = load_customers()
 
     # === 搜索筛选 ===
     keyword = request.args.get('keyword', '').strip()
     date_from = request.args.get('date_from', '').strip()
     date_to = request.args.get('date_to', '').strip()
+    customer_filter = request.args.get('customer', '').strip()
 
     filtered = quotes
     if keyword:
         kw = keyword.lower()
         filtered = [q for q in filtered if kw in q.get('quote_no', '').lower()
                     or kw in q.get('material_name', '').lower()
-                    or kw in q.get('remark', '').lower()]
+                    or kw in q.get('remark', '').lower()
+                    or kw in q.get('customer_name', '').lower()]
     if date_from:
         filtered = [q for q in filtered if q.get('created_at', '') >= date_from]
     if date_to:
-        # date_to 是日期，需要包含当天全天，所以加一天比较
         filtered = [q for q in filtered if q.get('created_at', '')[:10] <= date_to]
+    if customer_filter:
+        filtered = [q for q in filtered if str(q.get('customer_id', '')) == customer_filter]
 
     if filtered:
         rows_html = ''
@@ -1199,9 +1335,11 @@ def view_quotes():
             remark_cell = f'<td class="remark-cell">{remark}</td>' if remark else '<td class="remark-cell"><span class="tag-none">—</span></td>'
             q_unit = q.get('input_unit', 'cm')
             q_no = q.get('quote_no', f'QJ{q["id"]:08d}')
+            cust_name = q.get('customer_name', '') or '<span class="tag-none">—</span>'
             rows_html += f"""
             <tr>
               <td style="color:#8B5A2B;font-weight:600;font-size:13px;">{q_no}</td>
+              <td>{cust_name}</td>
               <td>{q['material_name']}</td>
               <td>{q['length']:.1f}×{q['width']:.1f}×{q['height']:.1f} {q_unit}</td>
               <td>{q['quantity']}</td>
@@ -1221,6 +1359,7 @@ def view_quotes():
           <thead>
             <tr>
               <th>报价单号</th>
+              <th>客户</th>
               <th>材质</th>
               <th>尺寸</th>
               <th>数量</th>
@@ -1242,19 +1381,29 @@ def view_quotes():
         </div>
         """
     else:
-        empty_msg = '没有找到匹配的报价记录，试试调整搜索条件。' if (keyword or date_from or date_to) else '暂无报价记录，去首页报价器生成第一条吧。'
+        has_filter = keyword or date_from or date_to or customer_filter
+        empty_msg = '没有找到匹配的报价记录，试试调整搜索条件。' if has_filter else '暂无报价记录，去首页报价器生成第一条吧。'
         table_html = f'<div class="empty-msg">{empty_msg}</div>'
+
+    # 客户筛选下拉
+    cust_filter_options = '<option value="">全部客户</option>\n'
+    for c in customers:
+        selected = 'selected' if str(c['id']) == customer_filter else ''
+        cust_filter_options += f'<option value="{c["id"]}" {selected}>{c["name"]}</option>\n'
 
     # 搜索栏
     search_html = f"""
     <div class="search-bar">
       <form method="GET" action="/quotes" class="search-form">
-        <input type="text" name="keyword" value="{keyword}" placeholder="搜报价单号 / 材质名 / 备注…" class="search-input">
+        <input type="text" name="keyword" value="{keyword}" placeholder="搜报价单号 / 客户 / 材质 / 备注…" class="search-input">
+        <select name="customer" class="search-date" style="min-width:120px;">
+          {cust_filter_options}
+        </select>
         <input type="date" name="date_from" value="{date_from}" class="search-date" title="开始日期">
         <span style="color:#999;">~</span>
         <input type="date" name="date_to" value="{date_to}" class="search-date" title="结束日期">
         <button type="submit" class="search-btn">搜索</button>
-        {'<a href="/quotes" class="search-reset">清除筛选</a>' if (keyword or date_from or date_to) else ''}
+        {'<a href="/quotes" class="search-reset">清除筛选</a>' if (keyword or date_from or date_to or customer_filter) else ''}
       </form>
     </div>
     """
@@ -1283,6 +1432,243 @@ def delete_quote(qid):
 def clear_all_quotes():
     save_quotes([])
     return redirect('/quotes')
+
+
+# ============================================================
+#  路由 5：客户管理（/customers）
+# ============================================================
+@app.route('/customers', methods=['GET', 'POST'])
+def view_customers():
+    customers = load_customers()
+
+    if request.method == 'POST':
+        # 添加客户
+        name = request.form.get('name', '').strip()
+        phone = request.form.get('phone', '').strip()
+        company = request.form.get('company', '').strip()
+        address = request.form.get('address', '').strip()
+
+        if name:
+            customer = {
+                'id': get_next_id(customers),
+                'name': name,
+                'phone': phone,
+                'company': company,
+                'address': address,
+                'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            customers.append(customer)
+            save_customers(customers)
+
+        return redirect('/customers')
+
+    # 搜索
+    keyword = request.args.get('keyword', '').strip()
+    filtered = customers
+    if keyword:
+        kw = keyword.lower()
+        filtered = [c for c in filtered if kw in c.get('name', '').lower()
+                    or kw in c.get('phone', '').lower()
+                    or kw in c.get('company', '').lower()
+                    or kw in c.get('address', '').lower()]
+
+    if filtered:
+        rows_html = ''
+        for c in reversed(filtered):
+            phone_cell = c.get('phone', '') or '<span class="tag-none">—</span>'
+            company_cell = c.get('company', '') or '<span class="tag-none">—</span>'
+            addr_cell = c.get('address', '') or '<span class="tag-none">—</span>'
+            safe_name = c['name'].replace("'", "\\'")
+            rows_html += f"""
+            <tr>
+              <td>{c['id']}</td>
+              <td><strong>{c['name']}</strong></td>
+              <td>{phone_cell}</td>
+              <td>{company_cell}</td>
+              <td>{addr_cell}</td>
+              <td>{c.get('created_at', '未知')}</td>
+              <td>
+                <a href="/customers/edit/{c['id']}" class="btn-link-edit">编辑</a>
+                <a href="/customers/delete/{c['id']}" class="btn-link-del" onclick="return confirm('确认删除客户「{safe_name}」？此操作不可撤销！')">删除</a>
+              </td>
+            </tr>
+            """
+        result_summary = f'共 {len(filtered)} 条'
+        if len(filtered) < len(customers):
+            result_summary += f'（筛选自 {len(customers)} 条）'
+        table_html = f"""
+        <table>
+          <thead>
+            <tr>
+              <th>编号</th>
+              <th>客户姓名</th>
+              <th>电话</th>
+              <th>公司名</th>
+              <th>地址</th>
+              <th>录入时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows_html}
+          </tbody>
+        </table>
+        <div class="table-footer">
+          <span style="color:#7a8494;font-size:13px;">{result_summary}</span>
+          <a href="/customers/clear-all" class="btn-clear-all" onclick="return confirm('⚠️ 确认清空全部客户数据？此操作不可撤销！')">清空全部客户</a>
+        </div>
+        """
+    else:
+        empty_msg = '没有找到匹配的客户，试试调整搜索。' if keyword else '暂无客户数据，在上方添加第一个客户吧。'
+        table_html = f'<div class="empty-msg">{empty_msg}</div>'
+
+    search_html = f"""
+    <div class="search-bar">
+      <form method="GET" action="/customers" class="search-form">
+        <input type="text" name="keyword" value="{keyword}" placeholder="搜客户名 / 电话 / 公司 / 地址…" class="search-input">
+        <button type="submit" class="search-btn">搜索</button>
+        {'<a href="/customers" class="search-reset">清除筛选</a>' if keyword else ''}
+      </form>
+    </div>
+    """
+
+    # 添加客户表单
+    add_form = """
+    <div class="card" style="margin-bottom: 20px;">
+      <h2>添加客户</h2>
+      <div class="tip">录入客户信息，报价时可直接选择关联。</div>
+      <form method="POST" action="/customers">
+        <div class="form-row">
+          <div class="form-group">
+            <label>客户姓名 *</label>
+            <input type="text" name="name" required placeholder="如：张先生">
+          </div>
+          <div class="form-group">
+            <label>联系电话</label>
+            <input type="text" name="phone" placeholder="如：13800138000">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>公司名称</label>
+            <input type="text" name="company" placeholder="如：XX包装有限公司">
+          </div>
+          <div class="form-group" style="flex:2;">
+            <label>送货地址</label>
+            <input type="text" name="address" placeholder="如：XX市XX区XX路XX号">
+          </div>
+        </div>
+        <button type="submit" class="btn">添加客户</button>
+      </form>
+    </div>
+    """
+
+    content = f"""
+    {add_form}
+    <div class="card">
+      <h2>客户列表</h2>
+      <div class="tip">管理所有客户信息，支持按姓名、电话、公司、地址搜索。</div>
+      {search_html}
+      {table_html}
+    </div>
+    """
+
+    return render_template_string(page_wrapper('客户管理 - 新一骏纸品有限公司', 'customers', content))
+
+
+@app.route('/customers/edit/<int:cid>', methods=['GET', 'POST'])
+def edit_customer(cid):
+    customers = load_customers()
+    customer = None
+    for c in customers:
+        if c['id'] == cid:
+            customer = c
+            break
+
+    if not customer:
+        return redirect('/customers')
+
+    if request.method == 'POST':
+        customer['name'] = request.form.get('name', '').strip()
+        customer['phone'] = request.form.get('phone', '').strip()
+        customer['company'] = request.form.get('company', '').strip()
+        customer['address'] = request.form.get('address', '').strip()
+        customer['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        save_customers(customers)
+
+        success_msg = '<div class="discount-notice" style="background:rgba(139,90,43,0.08);color:#8B5A2B;border-color:rgba(139,90,43,0.2);">✓ 客户信息修改成功！</div>'
+    else:
+        success_msg = ''
+
+    content = f"""
+    <div class="card">
+      <h2>编辑客户</h2>
+      {success_msg}
+      <form method="POST" action="/customers/edit/{cid}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>客户姓名 *</label>
+            <input type="text" name="name" value="{customer['name']}" required>
+          </div>
+          <div class="form-group">
+            <label>联系电话</label>
+            <input type="text" name="phone" value="{customer.get('phone', '')}">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>公司名称</label>
+            <input type="text" name="company" value="{customer.get('company', '')}">
+          </div>
+          <div class="form-group" style="flex:2;">
+            <label>送货地址</label>
+            <input type="text" name="address" value="{customer.get('address', '')}">
+          </div>
+        </div>
+        <button type="submit" class="btn">保存修改</button>
+        <a href="/customers" class="btn-link-edit" style="margin-left:10px;">← 返回列表</a>
+      </form>
+    </div>
+    """
+
+    return render_template_string(page_wrapper('编辑客户 - 新一骏纸品有限公司', 'customers', content))
+
+
+@app.route('/customers/delete/<int:cid>')
+def delete_customer(cid):
+    customers = load_customers()
+    customers = [c for c in customers if c['id'] != cid]
+    save_customers(customers)
+    return redirect('/customers')
+
+
+@app.route('/customers/clear-all')
+def clear_all_customers():
+    save_customers([])
+    return redirect('/customers')
+
+
+# ============================================================
+#  API：报价器内快速新建客户（AJAX）
+# ============================================================
+@app.route('/api/customers/quick-add', methods=['POST'])
+def quick_add_customer():
+    customers = load_customers()
+    name = request.form.get('name', '').strip()
+    phone = request.form.get('phone', '').strip()
+    if not name:
+        return jsonify({'success': False, 'message': '客户姓名不能为空'})
+    customer = {
+        'id': get_next_id(customers),
+        'name': name,
+        'phone': phone,
+        'company': '',
+        'address': '',
+        'created_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    customers.append(customer)
+    save_customers(customers)
+    return jsonify({'success': True, 'customer': customer})
 
 
 # ============================================================
@@ -1425,6 +1811,7 @@ def edit_material(rid):
 if __name__ == '__main__':
     # 启动时确保数据文件存在
     load_rules()
+    load_customers()
     _quotes = load_quotes()
     # 为历史报价记录补充编号
     if backfill_quote_no(_quotes):
